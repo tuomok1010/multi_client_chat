@@ -15,25 +15,52 @@
 #include <netdb.h>
 #include <poll.h>
 
-std::string GetPortNum()
+std::string GetUsername()
 {
-    std::string input{"9114"};
+    std::string name{};
     do
     {
-        std::cout << "Enter the port number (default: 9114) >" << std::flush;
+        std::cout << "Enter username >";
+        std::getline(std::cin, name);
+
+        if(name.length() <= 0)
+            std::cerr << "Name too short. Try again!" << std::endl;
+
+
+    } while (name.length() <= 0);
+    
+    return name;
+}
+
+std::string GetPortNum()
+{
+    std::string input{};
+    do
+    {
+        std::cout << "Enter the port number >" << std::flush;
         std::cin >> input;
 
-        if(std::stoi(input) > 65535)
+        try
         {
-            std::cout << "Error! Port number too large. Maximum is 65535. Press enter to continue." << std::flush;
-            std::cin.ignore();
-            std::cin.get();
+            if(std::stoi(input) > 65535)
+            {
+                std::cout << "Error! Port number too large. Maximum is 65535. Press enter to try again." << std::flush;
+                std::cin.ignore();
+                std::cin.get();
+            }
+            else if(std::stoi(input) <= 1024)
+            {
+                std::cout << "Error! Port number should be larger than 1024. Press enter to try again." << std::flush;
+                std::cin.ignore();
+                std::cin.get();
+            }
         }
-        else if(std::stoi(input) <= 1024)
+        catch(const std::invalid_argument& e)
         {
-            std::cout << "Error! Port number should be larger than 1024. Press enter to continue." << std::flush;
+            std::cerr << "Invalid port number. Press enter to try again." << std::endl;
             std::cin.ignore();
             std::cin.get();
+            input = "0";
         }
 
         system("clear");
@@ -102,12 +129,78 @@ void HandleNewConnection(struct pollfd* pollList, int size)
     }
 }
 
+void RelayMessagesToClients(struct pollfd* pollList, int size)
+{
+    char buffer[1024];
+
+    // loop through all sockets in poll list
+    for(int i = 1; i < size; ++i)
+    {
+        if(pollList[i].fd != -1 && pollList[i].revents & POLLIN)
+        {
+            int numBytes = recv(pollList[i].fd, buffer, sizeof(buffer), 0);
+            int senderFd = pollList[i].fd;
+
+            if(numBytes <= 0)
+            {
+                // got an error or connection closed by client
+                if(numBytes == 0)
+                    std::cout << "SERVER: socket " << senderFd << " hung up" << std::endl;
+                else
+                    perror("ERROR_SERVER: recv");
+
+                // if client disconnected, we want to close the socket and inactivate the fd in the pollList
+                close(pollList[i].fd);
+                pollList[i].fd = -1;       
+            }
+            else
+            {
+                // we got some good data from a client. we start looping at index 1 because we want to skip the listeningSocket(index 0)
+                for(int j = 1; j < size; ++j)
+                {
+                    // send the data to everyone except the client that is sending and none of the inactive sockets
+                    int destinationFd = pollList[j].fd;
+                    if(destinationFd != senderFd && destinationFd != -1)
+                    {
+                        int send_status = send(destinationFd, buffer, numBytes, 0);
+                        if(send_status == -1)
+                            perror("ERROR_SERVER: send");
+                    }
+                }
+            }                   
+        }               
+    }
+}
+
+void Poll(struct pollfd* pollList, int size)
+{
+    int pollsOccurred = poll(pollList, size, -1);
+
+    if(pollsOccurred == -1)
+    {
+        perror("ERROR_SERVER: poll");
+        exit(1);
+    }
+}
+
+// for debugging
+void PrintPollList(struct pollfd* pollList, int size)
+{
+    std::cout << "Poll list sockets: ";
+    for(int i = 0; i < size; ++i)
+    {
+        std::cout << pollList[i].fd << ", ";
+    }
+    std::cout << std::endl;
+}
+
 int main()
 {
+    std::string userName = GetUsername();
     std::string port = GetPortNum();
     int maxConnections = GetNumMaxConnections();
 
-    // server(host) logic
+    // server logic
     // ================================
     int listeningSocket{};              // main listening socket file descriptor
     struct addrinfo hints;              // used to setup the server data with the getaddrinfo() function
@@ -191,9 +284,6 @@ int main()
 
     std::cout << "waiting for connections..." << std::endl;
 
-
-    char buffer[1024];
-
     // pollList is used in the poll() function to check whenever a socket is ready to receive/send data
     // POLLIN means we are checking when data is ready to recv() in this socket
     struct pollfd pollList[maxConnections];
@@ -206,62 +296,13 @@ int main()
 
     while(true)
     {
-        std::cout << "Poll list: ";
-        for(auto& sock : pollList)
-        {
-            std::cout << sock.fd << ", ";
-        }
-        std::cout << std::endl;
+        PrintPollList(pollList, maxConnections);
 
-        // check if any events have occurred
-        int pollsOccurred = poll(pollList, maxConnections, -1);
-
-        if(pollsOccurred == -1)
-        {
-            perror("ERROR_SERVER: poll");
-            exit(1);
-        }
+        Poll(pollList, maxConnections);
 
         HandleNewConnection(pollList, maxConnections);
 
-        // loop through all current connected client sockets
-        for(int i = 1; i < maxConnections; ++i)
-        {
-            // if we are just a regular client:
-            if(pollList[i].fd != -1 && pollList[i].revents & POLLIN)
-            {
-                int numBytes = recv(pollList[i].fd, buffer, sizeof(buffer), 0);
-                int senderFd = pollList[i].fd;
-
-                if(numBytes <= 0)
-                {
-                    // got an error or connection closed by client
-                    if(numBytes == 0)
-                        std::cout << "SERVER: socket " << senderFd << " hung up" << std::endl;
-                    else
-                        perror("ERROR_SERVER: recv");
-
-                    // if client disconnected, we want to close the socket and inactivate the fd in the pollList
-                    close(pollList[i].fd);
-                    pollList[i].fd = -1;       
-                }
-                else
-                {
-                    // we got some good data from a client. we start looping at index 1 because we want to skip the listeningSocket(index 0)
-                    for(int j = 1; j < maxConnections; ++j)
-                    {
-                        // send the data to everyone except the listener and the client that is sending and none of the inactive sockets
-                        int destinationFd = pollList[j].fd;
-                        if(destinationFd != senderFd && destinationFd != -1)
-                        {
-                            int send_status = send(destinationFd, buffer, numBytes, 0);
-                            if(send_status == -1)
-                                perror("ERROR_SERVER: send");
-                        }
-                    }
-                }                   
-            }               
-        }
+        RelayMessagesToClients(pollList, maxConnections);
     }
     return 0;
 }
