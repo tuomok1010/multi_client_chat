@@ -8,6 +8,7 @@
 <b> Main changes that I made: </b>
 - Abstracted the entire code into classes.
 - Changed the way sockets are added into the pollfd array
+- User input
 
 
 Link to the original below:
