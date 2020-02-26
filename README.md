@@ -1,4 +1,4 @@
-# multi_client_chat
+# multi_client_chat(Linux)
 
 <b> A simple chat server that supports multiple connected clients. </b>
 <b> Use telnet to connect. For example: 'telnet 127.0.0.1 9114' </b>
